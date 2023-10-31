@@ -1,5 +1,7 @@
 # buildcoolshit: Lightweight WS2812B LED driver for use with letter boards and tinyAVRs
 
+![Build. Cool. Shit.](bcs.jpg)
+
 This is a program for tinyAVRs that targets the ubiquitous letter boards you can get on Amazon or
 at your local dollar store, and the LED tape you can get easily off eBay/Aliexpress/etc.
 
