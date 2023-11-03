@@ -45,7 +45,13 @@
 ///////////////////////////////////////////////////////////////////////
 // Define I/O pin
 ///////////////////////////////////////////////////////////////////////
-#define ws2812_port B     // Data port
-#define ws2812_pin  0     // Data out pin
+
+#ifdef __AVR_ATtiny402__
+  // only pin is used on ATTinyX02s, port is always VPORT_A.
+  #define ws2812_pin  1
+#else
+  #define ws2812_port B
+  #define ws2812_pin  0
+#endif
 
 #endif /* WS2812_CONFIG_H_ */

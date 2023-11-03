@@ -4,14 +4,11 @@
  * This targets the ubiquitous letter boards you can get on Amazon or at your local dollar store
  * and the LED tape you can get easily off eBay/Aliexpress/etc.
  * 
- * Requires FastLED for legacy stuff such as rainbow calculation.
  * A variant on avr-ws2812 (https://github.com/stephendpmurphy/avr-ws2812) is used as the LED driver,
  * and has been modified to work on 4bpp data (saves a huge amount of work RAM).
  */
 
-#include <FastLED.h>
 #include "avr_ws2812.h"
-
 
 // #define BIG_BOY for 12"x12" signs
 // else we assume 6"x6"
@@ -20,9 +17,9 @@
 // #define HIGH_DENSITY for higher-count LED strips
 #define HIGH_DENSITY
 
-#define LOW_DENSITY_LED_COUNT 6+6+6+6
-#define HI_DENSITY_LED_COUNT 12+11+11+10
-#define HI_DENSITY_BIG_BOY_LED_COUNT 18+17+17+16
+#define LOW_DENSITY_LED_COUNT (6+6+6+6)
+#define HI_DENSITY_LED_COUNT (12+11+11+10)
+#define HI_DENSITY_BIG_BOY_LED_COUNT (18+17+17+16)
 
 #ifdef HIGH_DENSITY
   #ifdef BIG_BOY
@@ -40,19 +37,55 @@
 
 #define AUTOADVANCE_TICK_COUNT M_MsToTick(30 * 1000)
 
+// if you want to use a specific mode and only that mode, set these defines appropriately.
+// #define USE_THIS_MODE_ONLY RAINBOW
+// #define INCLUDE_RAINBOW
+
+// default is to include all modes
+#ifndef USE_THIS_MODE_ONLY
+  #define INCLUDE_CHASER
+  #define INCLUDE_RAINBOW
+  #define INCLUDE_FLOOD
+  #define INCLUDE_CHAOS
+  #define INCLUDE_HALF_FRAME_FLOOD
+  #define INCLUDE_PACMAN
+  #define INCLUDE_QUARTER_FRAME_FLOOD
+  #define INCLUDE_SUPERCOMPUTER
+  #define INCLUDE_ROBOTRON
+#endif
+
 ////////////////////////////////////////////////////////////////////////
 // typedefs
 ////////////////////////////////////////////////////////////////////////
 typedef enum {
- CHASER = 0,
+ STUB = -1,
+#ifdef INCLUDE_CHASER
+ CHASER,
+#endif
+#ifdef INCLUDE_RAINBOW
  RAINBOW,
+#endif
+#ifdef INCLUDE_FLOOD
  FLOOD,
+#endif
+#ifdef INCLUDE_CHAOS
  CHAOS,
+#endif
+#ifdef INCLUDE_HALF_FRAME_FLOOD
  HALF_FRAME_FLOOD,
+#endif
+#ifdef INCLUDE_PACMAN
  PACMAN,
+#endif
+#ifdef INCLUDE_QUARTER_FRAME_FLOOD
  QUARTER_FRAME_FLOOD,
+#endif
+#ifdef INCLUDE_SUPERCOMPUTER
  SUPERCOMPUTER,
+#endif
+#ifdef INCLUDE_ROBOTRON
  ROBOTRON,
+#endif
  NUMBER_OF_MODES
 } bcs_state_t;
 
@@ -63,39 +96,34 @@ typedef void(*bcs_tick_fcn_t)();
 ////////////////////////////////////////////////////////////////////////
 
 uint8_t currentState;
-uint16_t leds[NUM_LEDS];
+uint16_t leds[NUM_LEDS]; // these are packed 4bpp ----gggg rrrrbbbb, there's simply not enough memory to store 8bpp
 
-unsigned long loopTickNextOut;
-unsigned long ticksElapsedThisState;
+// VERY aggressive sizecoding - saves bytes in reset().
+// anything in here will get clobbered when reset() is called.
+// beware that modifying these is dangerous.
+uint8_t globalStateVars[ sizeof(unsigned long) + sizeof(unsigned long) + sizeof(uint16_t)];
+#define loopTickNextOut       (*((unsigned long*)((uint8_t*)&globalStateVars[0])))
+#define ticksElapsedThisState (*((unsigned long*)((uint8_t*)&globalStateVars[sizeof(unsigned long)])))
+#define waitCounter           (*((uint16_t*)((uint8_t*)&globalStateVars[sizeof(unsigned long) + sizeof(unsigned long)])))
 
-uint16_t localStateTick;
-uint16_t localWaitCounter;
+// stores all variables specific to that state.
+// everything is zeroed when reset() is called.
+uint8_t localStateVars[6];
+#define localStateTick (*((uint16_t*)localStateVars + 4))
+
+////////////////////////////////////////////////////////////////////////
 
 void ledsReset() {
   blankAllLeds();
 }
 
 void ledsSend() {
-  // prevent unwelcome data corruption
-  uint8_t* ledptr = (uint8_t*)&leds[1]; // assumes little endianness
-  for (int i = 0; i < NUM_LEDS; i++) {
-    *ledptr &= 0x0F;
-    ledptr += 2;
-  }
-
   ws2812_setleds_4bpp( leds, NUM_LEDS );
 }
 
-int findDotInLeds(uint16_t value) {
-  for (int i = 0; i < NUM_LEDS; i++) {
-    if (leds[i] == value) return i;
-  }
-  return -1;
-}
-
 uint8_t inline waitForWaitCounterExpiry() {
-  if (localWaitCounter != 0) {
-    localWaitCounter --;
+  if (waitCounter != 0) {
+    waitCounter --;
     return 0;
   }
   return 1;
@@ -106,7 +134,6 @@ void blankAllLeds() {
     leds[i] = 0;
   }
 }
-
 
 ////////////////////////////////////////////////////////////////////////
 // chaser effect
@@ -122,18 +149,18 @@ void blankAllLeds() {
 
 void chaserTick() {
   blankAllLeds();
-  for (int i = localStateTick; i < NUM_LEDS; i += CHASER_STEP) M_SetWhite(leds,i);
-  localStateTick ++;
-  if (localStateTick > (CHASER_STEP-1)) localStateTick = 0;
-  localWaitCounter = M_MsToTick(150);
+  for (int i = localStateVars[0]; i < NUM_LEDS; i += CHASER_STEP) M_SetWhite(leds,i);
+  localStateVars[0] ++;
+  if (localStateVars[0] > (CHASER_STEP-1)) localStateVars[0] = 0;
+  waitCounter = M_MsToTick(150);
 }
 
 //////////////////////////////////////////////////
 // flood-fill schenanigans
 //////////////////////////////////////////////////
 
-uint8_t floodCurrentLed;
-uint8_t floodCurrentColor;
+#define floodCurrentLed    localStateVars[0]
+#define floodCurrentColor  localStateVars[1]
 
 PROGMEM const uint16_t g_flood_colors[] = {
   M_Pack_4bpp(255>>4,0,0),          // red
@@ -143,7 +170,7 @@ PROGMEM const uint16_t g_flood_colors[] = {
   M_Pack_4bpp(0,0,255>>4),          // blue
   M_Pack_4bpp(255>>4,0,255>>4),     // purple
   M_Pack_4bpp(0xF,0xF,0xF),         // white
-  M_Pack_4bpp(0,0,0),               // off
+  M_Pack_4bpp(0,0,0),               // off (do NOT change this, behavior in floodTickCommon() depends on it)
 };
 
 #define M_Get_Floodtable_Color(x) pgm_read_word_near(&g_flood_colors[x])
@@ -163,7 +190,7 @@ PROGMEM const uint16_t g_flood_colors[] = {
  */
 void floodTickCommon(uint8_t divider) {
   // if last and first LED blank, reset state machine
-  if (leds[0] == 0 && leds[NUM_LEDS-1] == 0x0000) {
+  if (leds[0] == 0 && leds[NUM_LEDS-1] == 0) {
     floodCurrentLed = 0;
     floodCurrentColor = 0;
   }
@@ -171,54 +198,158 @@ void floodTickCommon(uint8_t divider) {
   uint16_t half = NUM_LEDS >> 1;
   uint16_t quarter = NUM_LEDS >> 2;
 
-  if (floodCurrentLed == 0) {
-    uint16_t c = M_Get_Floodtable_Color(floodCurrentColor);;
-    leds[0] = c;
-    if (divider >= 1) {
-      leds[half] = c;
-    }
-    if (divider == 2) {
-      leds[quarter] = c;
-      leds[half + quarter] = c;
-    }
+  uint16_t color = M_Get_Floodtable_Color(floodCurrentColor);
 
-    floodCurrentLed ++;
+  leds[floodCurrentLed] = color;
+  if (divider >= 1) {
+    if ((floodCurrentLed + half) < NUM_LEDS) leds[floodCurrentLed + half] = color;
+  }
+  if (divider == 2) {
+    if ((floodCurrentLed + quarter) < NUM_LEDS) leds[floodCurrentLed + quarter] = color;
+    if ((floodCurrentLed + half + quarter) < NUM_LEDS) leds[floodCurrentLed + half + quarter] = color;
+  }
+
+  floodCurrentLed ++;
+  if (floodCurrentLed >= (NUM_LEDS >> divider)) {
+    waitCounter = M_MsToTick(250);
+    floodCurrentLed = 0;
     floodCurrentColor ++;
     floodCurrentColor &= 7;
   } else {
-    leds[floodCurrentLed] = leds[0];
-
-    if (divider >= 1) {
-      if ((floodCurrentLed + half) < NUM_LEDS) leds[floodCurrentLed + half] = leds[0];
-    }
-    if (divider == 2) {
-      if ((floodCurrentLed + quarter) < NUM_LEDS) leds[floodCurrentLed + quarter] = leds[0];
-      if ((floodCurrentLed + half + quarter) < NUM_LEDS) leds[floodCurrentLed + half + quarter] = leds[0];
-    }
-
-    floodCurrentLed ++;
-    if (floodCurrentLed >= (NUM_LEDS >> divider)) {
-      localWaitCounter = M_MsToTick(250);
-      floodCurrentLed = 0;
-    } else {
-      localWaitCounter = (FLOOD_RATE << divider);
-    }
+    waitCounter = (FLOOD_RATE << divider);
   }
 }
 
+// we assume compiler optimization helps us here, if it doesn't, too bad...
+
+#ifdef INCLUDE_FLOOD
 void floodTick() {
   floodTickCommon(0);
 }
+#endif
 
+#ifdef INCLUDE_HALF_FRAME_FLOOD
 void halfFrameFloodTick() {
-    floodTickCommon(1);
+  floodTickCommon(1);
 }
+#endif
 
+#ifdef INCLUDE_QUARTER_FRAME_FLOOD
 void quarterFrameFloodTick() {
-    floodTickCommon(2);
+  floodTickCommon(2);
 }
+#endif
 
-//////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////
+// rainbow functions
+//
+// this is a cut down version of how FastLED does it.
+// buildcoolshit formerly used FastLED, but FastLED is not compatible
+// with ATTiny402s, so that dependency had to be removed altogether.
+//////////////////////////////////////////////////////////////////////
+#ifdef INCLUDE_RAINBOW
+
+#define APPLY_DIMMING(X) (X)
+#define HSV_SECTION_3 (0x40)
+
+struct CHSV {
+  uint8_t hue;
+  uint8_t sat;
+  uint8_t val;
+};
+
+struct CRGB {
+  uint8_t r;
+  uint8_t g;
+  uint8_t b;
+};
+
+// ASM version gave compile errors...
+void hsv2rgb_raw_C (const struct CHSV & hsv, struct CRGB & rgb)
+{
+    // Convert hue, saturation and brightness ( HSV/HSB ) to RGB
+    // "Dimming" is used on saturation and brightness to make
+    // the output more visually linear.
+
+    // Apply dimming curves
+    uint8_t value = APPLY_DIMMING( hsv.val);
+    uint8_t saturation = hsv.sat;
+
+    // The brightness floor is minimum number that all of
+    // R, G, and B will be set to.
+    uint8_t invsat = APPLY_DIMMING( 255 - saturation);
+    uint8_t brightness_floor = (value * invsat) / 256;
+
+    // The color amplitude is the maximum amount of R, G, and B
+    // that will be added on top of the brightness_floor to
+    // create the specific hue desired.
+    uint8_t color_amplitude = value - brightness_floor;
+
+    // Figure out which section of the hue wheel we're in,
+    // and how far offset we are withing that section
+    uint8_t section = hsv.hue / HSV_SECTION_3; // 0..2
+    uint8_t offset = hsv.hue % HSV_SECTION_3;  // 0..63
+
+    uint8_t rampup = offset; // 0..63
+    uint8_t rampdown = (HSV_SECTION_3 - 1) - offset; // 63..0
+
+    // We now scale rampup and rampdown to a 0-255 range -- at least
+    // in theory, but here's where architecture-specific decsions
+    // come in to play:
+    // To scale them up to 0-255, we'd want to multiply by 4.
+    // But in the very next step, we multiply the ramps by other
+    // values and then divide the resulting product by 256.
+    // So which is faster?
+    //   ((ramp * 4) * othervalue) / 256
+    // or
+    //   ((ramp    ) * othervalue) /  64
+    // It depends on your processor architecture.
+    // On 8-bit AVR, the "/ 256" is just a one-cycle register move,
+    // but the "/ 64" might be a multicycle shift process. So on AVR
+    // it's faster do multiply the ramp values by four, and then
+    // divide by 256.
+    // On ARM, the "/ 256" and "/ 64" are one cycle each, so it's
+    // faster to NOT multiply the ramp values by four, and just to
+    // divide the resulting product by 64 (instead of 256).
+    // Moral of the story: trust your profiler, not your insticts.
+
+    // Since there's an AVR assembly version elsewhere, we'll
+    // assume what we're on an architecture where any number of
+    // bit shifts has roughly the same cost, and we'll remove the
+    // redundant math at the source level:
+
+    //  // scale up to 255 range
+    //  //rampup *= 4; // 0..252
+    //  //rampdown *= 4; // 0..252
+
+    // compute color-amplitude-scaled-down versions of rampup and rampdown
+    uint8_t rampup_amp_adj   = (rampup   * color_amplitude) / (256 / 4);
+    uint8_t rampdown_amp_adj = (rampdown * color_amplitude) / (256 / 4);
+
+    // add brightness_floor offset to everything
+    uint8_t rampup_adj_with_floor   = rampup_amp_adj   + brightness_floor;
+    uint8_t rampdown_adj_with_floor = rampdown_amp_adj + brightness_floor;
+
+
+    if( section ) {
+        if( section == 1) {
+            // section 1: 0x40..0x7F
+            rgb.r = brightness_floor;
+            rgb.g = rampdown_adj_with_floor;
+            rgb.b = rampup_adj_with_floor;
+        } else {
+            // section 2; 0x80..0xBF
+            rgb.r = rampup_adj_with_floor;
+            rgb.g = brightness_floor;
+            rgb.b = rampdown_adj_with_floor;
+        }
+    } else {
+        // section 0: 0x00..0x3F
+        rgb.r = rampdown_adj_with_floor;
+        rgb.g = rampup_adj_with_floor;
+        rgb.b = brightness_floor;
+    }
+}
 
 // fill_rainbow() from fastled's colorutils, but meant to work with 4bpp arrays
 void fill_rainbow_smolboi( uint16_t * targetArray, int numToFill,
@@ -229,8 +360,10 @@ void fill_rainbow_smolboi( uint16_t * targetArray, int numToFill,
     hsv.hue = initialhue;
     hsv.val = 255;
     hsv.sat = 240;
+
     for( int i = 0; i < numToFill; ++i) {
-        CRGB rgb = hsv;
+        CRGB rgb;
+        hsv2rgb_raw_C(hsv,rgb);
         leds[i] = M_Pack_4bpp(rgb.r >> 4, rgb.g >> 4, rgb.b >> 4);
         hsv.hue += deltahue;
     }
@@ -238,38 +371,54 @@ void fill_rainbow_smolboi( uint16_t * targetArray, int numToFill,
 
 void rainbowTick() {
   uint8_t deltaHue = 10;
-  uint8_t thisHue  = beat8(100, localStateTick++);
+  uint8_t thisHue  = localStateVars[0]+=3;
   fill_rainbow_smolboi(leds, NUM_LEDS, thisHue, deltaHue);
 }
+
+#endif
 
 //////////////////////////////////////////////////
 // randomized functions
 //////////////////////////////////////////////////
 
+#ifdef INCLUDE_CHAOS
 void chaosTick() {
   for (int i = 0; i < NUM_LEDS; i++) {
-    long picked_number = random() & 7;
+    uint8_t picked_number = random() & 7;
     leds[i] = M_Get_Floodtable_Color(picked_number);
   }
-  localWaitCounter = M_MsToTick(100);
+  waitCounter = M_MsToTick(100);
 }
+#endif
 
+#ifdef INCLUDE_SUPERCOMPUTER
 void supercomputerTick() {
   for (int i = 0; i < NUM_LEDS; i++) {
-    leds[i] = random(0,100) > 30 ? 0x000F : 0;
+    leds[i] = random() & 0xFF > 30 ? 0x000F : 0;
   }
-  localWaitCounter = M_MsToTick(100);
+  waitCounter = M_MsToTick(100);
 }
+#endif
 
 //////////////////////////////////////////////////
 // pacman chaser effect (sorry, no power pellets)
 //////////////////////////////////////////////////
+
+#ifdef INCLUDE_PACMAN
 
 #ifndef HIGH_DENSITY
   #define PACMAN_SPACING 3
 #else
   #define PACMAN_SPACING 4
 #endif
+
+int findDotInLeds(uint16_t value) {
+  for (int i = 0; i < NUM_LEDS; i++) {
+    if (leds[i] == value) return i;
+  }
+  return -1;
+}
+
 
 void pacmanDrawEntity(uint16_t color, int default_pos) {
   int pos = findDotInLeds(color);
@@ -300,79 +449,102 @@ void pacmanTick() {
     if (i > pacman_pos && leds[i] == 0) leds[i] = dot;
   }
 
-  localWaitCounter = M_MsToTick(80);
+  waitCounter = M_MsToTick(80);
 }
+
+#endif // #ifdef INCLUDE_PACMAN
 
 //////////////////////////////////////////////////
 // robotron 2084 scroller
 // see https://www.youtube.com/watch?v=l800GL6NQPY
 //////////////////////////////////////////////////
+#ifdef INCLUDE_ROBOTRON
 
 PROGMEM const uint16_t robotron_color_table[] = {
   M_Pack_4bpp(255>>5,255>>5,0),     // yellow
   M_Pack_4bpp(255>>5,96>>5,0),      // orange
-  M_Pack_4bpp(0xF>>1,1>>1,0xC>>1),           // pink
+  M_Pack_4bpp(0xF>>1,0,0xC>>1),           // pink
   M_Pack_4bpp(0,255>>5,0),          // green
   M_Pack_4bpp(255>>5,96>>5,0),      // orange
   M_Pack_4bpp(0,0,255>>5),          // blue
   M_Pack_4bpp(255>>5,0,0),          // red
 };
 
+uint16_t tinyModulo(uint16_t a, uint16_t b) {
+  return a - b * (a/b);
+}
 
 void robotronTick() {
-  // fill empty LEDs once per tick until all are set
-  for (int i = 0; i < NUM_LEDS; i++) {
-    if (leds[i] == 0) {
-      leds[i] = pgm_read_word_near(&robotron_color_table[i % 7]);
-      localWaitCounter = M_MsToTick(80);
-      return;
-    }
+  if (localStateVars[0] < NUM_LEDS) {
+    leds[localStateVars[0]++] = pgm_read_word_near(&robotron_color_table[tinyModulo(localStateVars[0],7)]);
+    waitCounter = M_MsToTick(80);
+    return;
   }
 
   // on even frames, blink every 7th chaser counterclockwise
   int8_t dot = -1;
   if ((localStateTick & 1) != 0) {
-    dot = 6 - ((localStateTick >> 1) % 7);
+    dot = 6 - tinyModulo((localStateTick >> 1), 7);
   }
 
   // advance the normal color chasers clockwise
   for (int i = 0; i < NUM_LEDS; i++) {
-    if (dot != -1 && (i%7)==dot) leds[i] = 0x0FFF;
-    else leds[i] = pgm_read_word_near(&robotron_color_table[ abs(i - localStateTick) % 7]);
+    if (dot != -1 && tinyModulo(i,7)==dot) leds[i] = 0x0FFF;
+    else leds[i] = pgm_read_word_near(&robotron_color_table[ tinyModulo( abs(i - localStateTick), 7) ]);
   }
 
   localStateTick ++;
-  localWaitCounter = M_MsToTick(80);
+  waitCounter = M_MsToTick(80);
 }
+
+#endif
 
 //////////////////////////////////////////////////
 // Main Arduino handlers and statemachine stuff
 //////////////////////////////////////////////////
 
 bcs_tick_fcn_t handlers[NUMBER_OF_MODES] = {
+#ifdef INCLUDE_CHASER
   chaserTick,
+#endif
+#ifdef INCLUDE_RAINBOW
   rainbowTick,
+#endif
+#ifdef INCLUDE_FLOOD
   floodTick,
+#endif
+#ifdef INCLUDE_CHAOS
   chaosTick,
+#endif
+#ifdef INCLUDE_HALF_FRAME_FLOOD
   halfFrameFloodTick,
+#endif
+#ifdef INCLUDE_PACMAN
   pacmanTick,
+#endif
+#ifdef INCLUDE_QUARTER_FRAME_FLOOD
   quarterFrameFloodTick,
+#endif
+#ifdef INCLUDE_SUPERCOMPUTER
   supercomputerTick,
+#endif
+#ifdef INCLUDE_ROBOTRON
   robotronTick,
+#endif
 };
 
 /**
  * Reset local state
  */
 void reset() {
-  // local state must reset
-  ticksElapsedThisState = 0;
-  loopTickNextOut = 0;
+  for (int i = 0; i < 10; i++) {
+    globalStateVars[i] = 0;
+  }
+  for (int i = 0; i < 6; i++) {
+    localStateVars[i] = 0;
+  }
 
-  localStateTick = 0;
-  localWaitCounter = 0;
-
-  // reset LEDs
+  waitCounter = 0;
   ledsReset();
 }
 

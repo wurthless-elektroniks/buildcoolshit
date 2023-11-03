@@ -37,8 +37,13 @@
 #define CONCAT(a, b)            a ## b
 #define CONCAT_EXP(a, b)   CONCAT(a, b)
 
-#define ws2812_PORTREG  CONCAT_EXP(PORT,ws2812_port)
-#define ws2812_DDRREG   CONCAT_EXP(DDR,ws2812_port)
+#ifdef __AVR_ATtiny402__
+  #define ws2812_PORTREG  VPORTA_OUT
+  #define ws2812_DDRREG   VPORTA_DIR
+#else
+  #define ws2812_PORTREG  CONCAT_EXP(PORT,ws2812_port)
+  #define ws2812_DDRREG   CONCAT_EXP(DDR,ws2812_port)
+#endif
 
 // Setleds for standard RGB
 void inline ws2812_setleds(ws2812_RGB_t *ledarray, uint16_t leds)
@@ -125,67 +130,9 @@ void ws2812_sendarray(uint8_t *data,uint16_t datlen)
 #define w_nop8  w_nop4 w_nop4
 #define w_nop16 w_nop8 w_nop8
 
-void inline ws2812_sendarray_mask(uint8_t *data,uint16_t datlen,uint8_t maskhi)
-{
-  uint8_t curbyte,ctr,masklo;
-  uint8_t sreg_prev;
-
-  ws2812_DDRREG |= maskhi; // Enable output
-
-  masklo	=~maskhi&ws2812_PORTREG;
-  maskhi |=        ws2812_PORTREG;
-
-  sreg_prev=SREG;
-  cli();
-
-  while (datlen--) {
-    curbyte=*data++;
-    writebyte(curbyte,maskhi,masklo,ctr);
-  }
-
-  SREG=sreg_prev;
-}
-
 // ******************************************************************************************************
 // patches here courtesy of wurthless elektroniks, for use with ATTinys with very little RAM space
 // ******************************************************************************************************
-
-void ws2812_setleds_4bpp(uint16_t* data, uint16_t leds)
-{
-  ws2812_sendarray_mask_packed_4bpp(data, leds, _BV(ws2812_pin));
-  _delay_us(ws2812_resettime);
-}
-
-void inline ws2812_sendarray_mask_packed_4bpp(uint16_t *data,uint16_t count,uint8_t maskhi)
-{
-  uint8_t curbyte,ctr,masklo;
-  uint8_t sreg_prev;
-
-  ws2812_DDRREG |= maskhi; // Enable output
-
-  masklo	=~maskhi&ws2812_PORTREG;
-  maskhi |=        ws2812_PORTREG;
-
-  sreg_prev=SREG;
-  cli();
-
-  while (count--) {
-    uint16_t d = *data++; 
-    
-    // at 8 MHz, this is *just* able to get the data clocked out in time.
-    // it's a miracle this even works at all.
-    uint8_t g = d >> 8; // the AND on the high bits is skipped here to save CPU time during the loop. beware!!
-    uint8_t r = (d & 0x00F0) >> 4;
-    uint8_t b = (d & 0x000F);
-    
-    // data is written g/r/b
-    writebyte(g,maskhi,masklo,ctr);
-    writebyte(r,maskhi,masklo,ctr);
-    writebyte(b,maskhi,masklo,ctr);
-  }
-
-  SREG=sreg_prev;
-}
 
 void inline writebyte(uint8_t curbyte, uint8_t maskhi, uint8_t masklo, uint8_t ctr) {
   __asm volatile(
@@ -248,3 +195,63 @@ w_nop16
     :	"r" (curbyte), "I" (_SFR_IO_ADDR(ws2812_PORTREG)), "r" (maskhi), "r" (masklo)
     );
 }
+
+void inline ws2812_sendarray_mask(uint8_t *data,uint16_t datlen,uint8_t maskhi)
+{
+  uint8_t curbyte,ctr,masklo;
+  uint8_t sreg_prev;
+
+  ws2812_DDRREG |= maskhi; // Enable output
+
+  masklo	=~maskhi&ws2812_PORTREG;
+  maskhi |=        ws2812_PORTREG;
+
+  sreg_prev=SREG;
+  cli();
+
+  while (datlen--) {
+    curbyte=*data++;
+    writebyte(curbyte,maskhi,masklo,ctr);
+  }
+
+  SREG=sreg_prev;
+}
+
+
+void ws2812_sendarray_mask_packed_4bpp(uint16_t *data,uint16_t count,uint8_t maskhi)
+{
+  uint8_t curbyte,ctr,masklo;
+  uint8_t sreg_prev;
+
+  ws2812_DDRREG |= maskhi; // Enable output
+
+  masklo	=~maskhi&ws2812_PORTREG;
+  maskhi |=        ws2812_PORTREG;
+
+  sreg_prev=SREG;
+  cli();
+
+  while (count--) {
+    uint16_t d = *data++; 
+    
+    // at 8 MHz, this is *just* able to get the data clocked out in time.
+    // it's a miracle this even works at all.
+    uint8_t g = d >> 8; // the AND on the high bits is skipped here to save CPU time during the loop. beware!!
+    uint8_t r = (d & 0x00F0) >> 4;
+    uint8_t b = (d & 0x000F);
+    
+    // data is written g/r/b
+    writebyte(g,maskhi,masklo,ctr);
+    writebyte(r,maskhi,masklo,ctr);
+    writebyte(b,maskhi,masklo,ctr);
+  }
+
+  SREG=sreg_prev;
+}
+
+void ws2812_setleds_4bpp(uint16_t* data, uint16_t leds)
+{
+  ws2812_sendarray_mask_packed_4bpp(data, leds, _BV(ws2812_pin));
+  _delay_us(ws2812_resettime);
+}
+

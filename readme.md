@@ -5,8 +5,9 @@
 This is a program for tinyAVRs that targets the ubiquitous letter boards you can get on Amazon or
 at your local dollar store, and the LED tape you can get easily off eBay/Aliexpress/etc.
 
-This program is heavily optimized for size and memory usage. It fits nicely on an ATTiny45. A conversion
-to the much cheaper ATTiny404 is planned in the future.
+This program is heavily optimized for size and memory usage. When all functions are enabled, the program
+easily fits on an ATTiny45. With other functions turned off and less LEDs to drive, it's trivial to fit
+single-effect builds on the ATTiny25.
 
 As this program uses BSD-licensed code from the [avr-ws2812 project](https://github.com/stephendpmurphy/avr-ws2812), I have to make my modifications
 open source.
@@ -17,6 +18,11 @@ open source.
 * Letter board (this targets 6x6 or 12x12 letter boards)
 * WS2812 LED tape
 * Something to hold it all together and power it
+
+# Supported ATTinys
+
+* ATTinyX5, primarily targeting ATTiny45s
+* ATTinyX02, primarily targeting ATTiny402s
 
 # License
 
