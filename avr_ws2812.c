@@ -232,6 +232,8 @@ void ws2812_sendarray_mask_packed_4bpp(uint16_t *data,uint16_t count,uint8_t mas
   cli();
 
   while (count--) {
+    uint16_t d = *data++;
+
     // at 8 MHz, this is *just* able to get the data clocked out in time.
     // it's a miracle this even works at all.
     uint8_t g = d >> 8; // the AND on the high bits is skipped here to save CPU time during the loop. beware!!
