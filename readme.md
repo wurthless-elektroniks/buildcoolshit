@@ -16,7 +16,7 @@ open source.
 
 * AVR with at least 4k program space and 256 bytes RAM
 * Letter board (this targets 6x6 or 12x12 letter boards)
-* WS2812 LED tape
+* WS2812B LED tape
 * Something to hold it all together and power it
 
 # Supported ATTinys

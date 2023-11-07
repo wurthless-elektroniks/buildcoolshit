@@ -89,13 +89,19 @@ typedef enum {
  NUMBER_OF_MODES
 } bcs_state_t;
 
-typedef void(*bcs_tick_fcn_t)();
+// all functions return number of ticks to wait until next tick (0 = execute next immediately)
+typedef uint16_t(*bcs_tick_fcn_t)();
 
 ////////////////////////////////////////////////////////////////////////
 // global vars
 ////////////////////////////////////////////////////////////////////////
 
+// current state only kept track of if we switch between modes
+#ifndef USE_THIS_MODE_ONLY
 uint8_t currentState;
+#endif
+
+
 uint16_t leds[NUM_LEDS]; // these are packed 4bpp ----gggg rrrrbbbb, there's simply not enough memory to store 8bpp
 
 // VERY aggressive sizecoding - saves bytes in reset().
@@ -109,7 +115,7 @@ uint8_t globalStateVars[ sizeof(unsigned long) + sizeof(unsigned long) + sizeof(
 // stores all variables specific to that state.
 // everything is zeroed when reset() is called.
 uint8_t localStateVars[6];
-#define localStateTick (*((uint16_t*)localStateVars + 4))
+#define localStateTick (*((uint16_t*)(&localStateVars[4])))
 
 ////////////////////////////////////////////////////////////////////////
 
@@ -147,12 +153,12 @@ void blankAllLeds() {
   #define CHASER_STEP 3
 #endif
 
-void chaserTick() {
+uint16_t chaserTick() {
   blankAllLeds();
   for (int i = localStateVars[0]; i < NUM_LEDS; i += CHASER_STEP) M_SetWhite(leds,i);
   localStateVars[0] ++;
   if (localStateVars[0] > (CHASER_STEP-1)) localStateVars[0] = 0;
-  waitCounter = M_MsToTick(150);
+  return M_MsToTick(150);
 }
 
 //////////////////////////////////////////////////
@@ -185,58 +191,55 @@ PROGMEM const uint16_t g_flood_colors[] = {
   #define FLOOD_RATE M_MsToTick(50)
 #endif
 
+void floodTickFill(uint8_t divider, uint8_t l, uint8_t r, uint8_t step, uint16_t color) {
+  if (divider > 0) {
+    floodTickFill(divider - 1, l, r >> 1, step,color);
+    floodTickFill(divider - 1, r >> 1, r, step,color);
+  } else {
+    if ( (l + step) < NUM_LEDS) leds[l + step] = color;
+  }
+}
+
 /**
  * divider: 0 = fill whole frame, 1 = fill halves, 2 = fill quarters.
  */
-void floodTickCommon(uint8_t divider) {
+uint16_t floodTickCommon(uint8_t divider) {
   // if last and first LED blank, reset state machine
   if (leds[0] == 0 && leds[NUM_LEDS-1] == 0) {
     floodCurrentLed = 0;
     floodCurrentColor = 0;
   }
 
-  uint16_t half = NUM_LEDS >> 1;
-  uint16_t quarter = NUM_LEDS >> 2;
-
-  uint16_t color = M_Get_Floodtable_Color(floodCurrentColor);
-
-  leds[floodCurrentLed] = color;
-  if (divider >= 1) {
-    if ((floodCurrentLed + half) < NUM_LEDS) leds[floodCurrentLed + half] = color;
-  }
-  if (divider == 2) {
-    if ((floodCurrentLed + quarter) < NUM_LEDS) leds[floodCurrentLed + quarter] = color;
-    if ((floodCurrentLed + half + quarter) < NUM_LEDS) leds[floodCurrentLed + half + quarter] = color;
-  }
-
+  floodTickFill(divider,0,NUM_LEDS,floodCurrentLed,M_Get_Floodtable_Color(floodCurrentColor));
   floodCurrentLed ++;
+
   if (floodCurrentLed >= (NUM_LEDS >> divider)) {
-    waitCounter = M_MsToTick(250);
     floodCurrentLed = 0;
     floodCurrentColor ++;
     floodCurrentColor &= 7;
+    return M_MsToTick(250);
   } else {
-    waitCounter = (FLOOD_RATE << divider);
+    return (FLOOD_RATE << divider);
   }
 }
 
 // we assume compiler optimization helps us here, if it doesn't, too bad...
 
 #ifdef INCLUDE_FLOOD
-void floodTick() {
-  floodTickCommon(0);
+uint16_t floodTick() {
+  return floodTickCommon(0);
 }
 #endif
 
 #ifdef INCLUDE_HALF_FRAME_FLOOD
-void halfFrameFloodTick() {
-  floodTickCommon(1);
+uint16_t halfFrameFloodTick() {
+  return floodTickCommon(1);
 }
 #endif
 
 #ifdef INCLUDE_QUARTER_FRAME_FLOOD
-void quarterFrameFloodTick() {
-  floodTickCommon(2);
+uint16_t quarterFrameFloodTick() {
+  return floodTickCommon(2);
 }
 #endif
 
@@ -369,10 +372,11 @@ void fill_rainbow_smolboi( uint16_t * targetArray, int numToFill,
     }
 }
 
-void rainbowTick() {
+uint16_t rainbowTick() {
   uint8_t deltaHue = 10;
   uint8_t thisHue  = localStateVars[0]+=3;
   fill_rainbow_smolboi(leds, NUM_LEDS, thisHue, deltaHue);
+  return 0;
 }
 
 #endif
@@ -381,22 +385,31 @@ void rainbowTick() {
 // randomized functions
 //////////////////////////////////////////////////
 
-#ifdef INCLUDE_CHAOS
-void chaosTick() {
+uint16_t randomFill( uint16_t(*f)() ) {
   for (int i = 0; i < NUM_LEDS; i++) {
-    uint8_t picked_number = random() & 7;
-    leds[i] = M_Get_Floodtable_Color(picked_number);
+    leds[i] = f();
   }
-  waitCounter = M_MsToTick(100);
+  return M_MsToTick(100);
+}
+
+#ifdef INCLUDE_CHAOS
+uint16_t chaosFill() {
+    uint8_t picked_number = random() & 7;
+    return M_Get_Floodtable_Color(picked_number);
+}
+
+uint16_t chaosTick() {
+  return randomFill(chaosFill);
 }
 #endif
 
 #ifdef INCLUDE_SUPERCOMPUTER
-void supercomputerTick() {
-  for (int i = 0; i < NUM_LEDS; i++) {
-    leds[i] = random() & 0xFF > 30 ? 0x000F : 0;
-  }
-  waitCounter = M_MsToTick(100);
+uint16_t supercomputerFill() {
+  return random() & 0xFF > 30 ? 0x000F : 0;
+}
+
+uint16_t supercomputerTick() {
+  return randomFill(supercomputerFill);
 }
 #endif
 
@@ -434,7 +447,7 @@ PROGMEM const uint16_t pacman_ghosts_table[] = {
   M_Pack_4bpp(0xF,0,0) // blinky
 };
 
-void pacmanTick() {
+uint16_t pacmanTick() {
   const uint16_t pacman = M_Pack_4bpp(0xF,0xF,0);
   const uint16_t dot = M_Pack_4bpp(0x1,0x1,0x1);
 
@@ -449,7 +462,7 @@ void pacmanTick() {
     if (i > pacman_pos && leds[i] == 0) leds[i] = dot;
   }
 
-  waitCounter = M_MsToTick(80);
+  return M_MsToTick(80);
 }
 
 #endif // #ifdef INCLUDE_PACMAN
@@ -474,11 +487,10 @@ uint16_t tinyModulo(uint16_t a, uint16_t b) {
   return a - b * (a/b);
 }
 
-void robotronTick() {
+uint16_t robotronTick() {
   if (localStateVars[0] < NUM_LEDS) {
     leds[localStateVars[0]++] = pgm_read_word_near(&robotron_color_table[tinyModulo(localStateVars[0],7)]);
-    waitCounter = M_MsToTick(80);
-    return;
+    return M_MsToTick(80);
   }
 
   // on even frames, blink every 7th chaser counterclockwise
@@ -494,7 +506,7 @@ void robotronTick() {
   }
 
   localStateTick ++;
-  waitCounter = M_MsToTick(80);
+  return M_MsToTick(80);
 }
 
 #endif
@@ -503,7 +515,7 @@ void robotronTick() {
 // Main Arduino handlers and statemachine stuff
 //////////////////////////////////////////////////
 
-bcs_tick_fcn_t handlers[NUMBER_OF_MODES] = {
+const PROGMEM bcs_tick_fcn_t handlers[NUMBER_OF_MODES] = {
 #ifdef INCLUDE_CHASER
   chaserTick,
 #endif
@@ -537,14 +549,12 @@ bcs_tick_fcn_t handlers[NUMBER_OF_MODES] = {
  * Reset local state
  */
 void reset() {
-  for (int i = 0; i < 10; i++) {
+  for (int i = 0; i < sizeof(globalStateVars); i++) {
     globalStateVars[i] = 0;
   }
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < sizeof(localStateVars); i++) {
     localStateVars[i] = 0;
   }
-
-  waitCounter = 0;
   ledsReset();
 }
 
@@ -566,11 +576,14 @@ void loop() {
   // if the wait counter is ticking down, don't do anything for this tick,
   // otherwise call the appropriate handler
   if (waitForWaitCounterExpiry()) {
+    bcs_tick_fcn_t f;
 #ifdef USE_THIS_MODE_ONLY
-    handlers[USE_THIS_MODE_ONLY]();
+    f = pgm_read_ptr_near( &handlers[USE_THIS_MODE_ONLY] );
 #else
-    handlers[currentState]();
+    f = pgm_read_ptr_near( &handlers[currentState] );
 #endif
+    waitCounter = f();
+
     // push LED updates after every tick executes
     // (saves code space)
     ledsSend();
@@ -578,16 +591,17 @@ void loop() {
 
 #ifndef USE_THIS_MODE_ONLY
   ticksElapsedThisState ++;
-  if (ticksElapsedThisState > AUTOADVANCE_TICK_COUNT) goto advance;
+  if (ticksElapsedThisState > AUTOADVANCE_TICK_COUNT) {
+    reset();
+  
+    currentState ++;
+    if (currentState == NUMBER_OF_MODES) currentState = 0;
+    ticksElapsedThisState = 0;
+    
+    return;
+  }
 #endif
   unsigned long loopTickDelta = millis() - before;
   loopTickNextOut = millis() + ((MS_PER_TICK >= loopTickDelta) ? (MS_PER_TICK - loopTickDelta) : 0);
-  return;
-
-advance:
-  reset();
-  
-  currentState ++;
-  if (currentState == NUMBER_OF_MODES) currentState = 0;
-  ticksElapsedThisState = 0;
 }
+
