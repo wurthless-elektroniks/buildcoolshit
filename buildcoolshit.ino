@@ -195,14 +195,6 @@ PROGMEM const uint16_t g_flood_colors[] = {
   #define FLOOD_RATE M_MsToTick(50)
 #endif
 
-void floodTickFill(uint8_t divider, uint8_t l, uint8_t r, uint8_t step, uint16_t color) {
-  if (divider > 0) {
-    floodTickFill(divider - 1, l, r >> 1, step,color);
-    floodTickFill(divider - 1, r >> 1, r, step,color);
-  } else {
-    if ( (l + step) < NUM_LEDS) leds[l + step] = color;
-  }
-}
 
 /**
  * divider: 0 = fill whole frame, 1 = fill halves, 2 = fill quarters.
@@ -214,7 +206,16 @@ uint16_t floodTickCommon(uint8_t divider) {
     floodCurrentColor = 0;
   }
 
-  floodTickFill(divider,0,NUM_LEDS,floodCurrentLed,M_Get_Floodtable_Color(floodCurrentColor));
+  leds[floodCurrentLed] = M_Get_Floodtable_Color(floodCurrentColor);
+  if (divider > 0) {
+    uint8_t step = NUM_LEDS >> divider;
+    uint8_t curstep = step;
+    for (int i = 1; i < (divider << 1); i++) {
+      leds[curstep + floodCurrentLed] = leds[floodCurrentLed];
+      curstep += step;
+    }
+  }
+  // floodTickFill(divider,0,NUM_LEDS,floodCurrentLed,);
   floodCurrentLed ++;
 
   if (floodCurrentLed >= (NUM_LEDS >> divider)) {
