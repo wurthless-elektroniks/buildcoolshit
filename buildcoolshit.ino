@@ -253,23 +253,28 @@ uint16_t quarterFrameFloodTick() {
 #ifdef INCLUDE_RAINBOW
 
 uint16_t calcRainbow(uint8_t step) {
-  step &= 0x2F;
-  if (0x20 <= step && step <= 0x2F) {
-    step &= 0xF;
-    return M_Pack_4bpp(step, 0, 0x0F-step);   
-  } else if (0x10 <= step && step <= 0x1F) {
-    step &= 0xF;
-    return M_Pack_4bpp(0, 0x0F-step, step);
-  } else {
+  if (step < 0x10) {
     return M_Pack_4bpp(0x0F-step, step, 0);
   }
+  step -= 0x10;
+  if (step < 0x10) {
+    return M_Pack_4bpp(0, 0x0F-step, step);
+  }
+  step -= 0x10;
+  return M_Pack_4bpp(step, 0, 0x0F-step);
 }
 
 uint16_t rainbowTick() {
-  uint8_t thisHue  = localStateVars[0]++;
+  uint8_t thisHue  = localStateVars[0];
+
   for(int i = 0; i < NUM_LEDS; i++) {
-    leds[i] = calcRainbow( ((int)(i + thisHue)) );
+    leds[i] = calcRainbow( thisHue ++ );
+    if (thisHue == 0x30) thisHue = 0;
   }
+  
+  localStateVars[0] ++;
+  if (localStateVars[0] == 0x30) localStateVars[0] = 0;
+
   return M_MsToTick(10);
 }
 
