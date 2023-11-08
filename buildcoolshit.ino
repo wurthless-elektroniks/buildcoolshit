@@ -101,8 +101,8 @@ typedef uint16_t(*bcs_tick_fcn_t)();
 uint8_t currentState;
 #endif
 
-
-uint16_t leds[NUM_LEDS]; // these are packed 4bpp ----gggg rrrrbbbb, there's simply not enough memory to store 8bpp
+// these are packed 4bpp ----gggg rrrrbbbb, there's simply not enough memory to store 8bpp
+uint16_t leds[NUM_LEDS]; 
 
 // VERY aggressive sizecoding - saves bytes in reset().
 // anything in here will get clobbered when reset() is called.
@@ -141,11 +141,13 @@ void blankAllLeds() {
   }
 }
 
+uint16_t tinyModulo(uint16_t a, uint16_t b) {
+  return a - b * (a/b);
+}
+
 ////////////////////////////////////////////////////////////////////////
 // chaser effect
 ////////////////////////////////////////////////////////////////////////
-
-#define M_SetWhite(_leds,i) _leds[i] = M_Pack_4bpp(0xF,0xF,0xF);
 
 #ifdef HIGH_DENSITY
   #define CHASER_STEP 4
@@ -155,7 +157,9 @@ void blankAllLeds() {
 
 uint16_t chaserTick() {
   blankAllLeds();
-  for (int i = localStateVars[0]; i < NUM_LEDS; i += CHASER_STEP) M_SetWhite(leds,i);
+  for (int i = localStateVars[0]; i < NUM_LEDS; i += CHASER_STEP) {
+    leds[i] = M_Pack_4bpp(0xF,0xF,0xF);
+  }
   localStateVars[0] ++;
   if (localStateVars[0] > (CHASER_STEP-1)) localStateVars[0] = 0;
   return M_MsToTick(150);
@@ -244,139 +248,29 @@ uint16_t quarterFrameFloodTick() {
 #endif
 
 //////////////////////////////////////////////////////////////////////
-// rainbow functions
-//
-// this is a cut down version of how FastLED does it.
-// buildcoolshit formerly used FastLED, but FastLED is not compatible
-// with ATTiny402s, so that dependency had to be removed altogether.
+// rainbow
 //////////////////////////////////////////////////////////////////////
 #ifdef INCLUDE_RAINBOW
 
-#define APPLY_DIMMING(X) (X)
-#define HSV_SECTION_3 (0x40)
-
-struct CHSV {
-  uint8_t hue;
-  uint8_t sat;
-  uint8_t val;
-};
-
-struct CRGB {
-  uint8_t r;
-  uint8_t g;
-  uint8_t b;
-};
-
-// ASM version gave compile errors...
-void hsv2rgb_raw_C (const struct CHSV & hsv, struct CRGB & rgb)
-{
-    // Convert hue, saturation and brightness ( HSV/HSB ) to RGB
-    // "Dimming" is used on saturation and brightness to make
-    // the output more visually linear.
-
-    // Apply dimming curves
-    uint8_t value = APPLY_DIMMING( hsv.val);
-    uint8_t saturation = hsv.sat;
-
-    // The brightness floor is minimum number that all of
-    // R, G, and B will be set to.
-    uint8_t invsat = APPLY_DIMMING( 255 - saturation);
-    uint8_t brightness_floor = (value * invsat) / 256;
-
-    // The color amplitude is the maximum amount of R, G, and B
-    // that will be added on top of the brightness_floor to
-    // create the specific hue desired.
-    uint8_t color_amplitude = value - brightness_floor;
-
-    // Figure out which section of the hue wheel we're in,
-    // and how far offset we are withing that section
-    uint8_t section = hsv.hue / HSV_SECTION_3; // 0..2
-    uint8_t offset = hsv.hue % HSV_SECTION_3;  // 0..63
-
-    uint8_t rampup = offset; // 0..63
-    uint8_t rampdown = (HSV_SECTION_3 - 1) - offset; // 63..0
-
-    // We now scale rampup and rampdown to a 0-255 range -- at least
-    // in theory, but here's where architecture-specific decsions
-    // come in to play:
-    // To scale them up to 0-255, we'd want to multiply by 4.
-    // But in the very next step, we multiply the ramps by other
-    // values and then divide the resulting product by 256.
-    // So which is faster?
-    //   ((ramp * 4) * othervalue) / 256
-    // or
-    //   ((ramp    ) * othervalue) /  64
-    // It depends on your processor architecture.
-    // On 8-bit AVR, the "/ 256" is just a one-cycle register move,
-    // but the "/ 64" might be a multicycle shift process. So on AVR
-    // it's faster do multiply the ramp values by four, and then
-    // divide by 256.
-    // On ARM, the "/ 256" and "/ 64" are one cycle each, so it's
-    // faster to NOT multiply the ramp values by four, and just to
-    // divide the resulting product by 64 (instead of 256).
-    // Moral of the story: trust your profiler, not your insticts.
-
-    // Since there's an AVR assembly version elsewhere, we'll
-    // assume what we're on an architecture where any number of
-    // bit shifts has roughly the same cost, and we'll remove the
-    // redundant math at the source level:
-
-    //  // scale up to 255 range
-    //  //rampup *= 4; // 0..252
-    //  //rampdown *= 4; // 0..252
-
-    // compute color-amplitude-scaled-down versions of rampup and rampdown
-    uint8_t rampup_amp_adj   = (rampup   * color_amplitude) / (256 / 4);
-    uint8_t rampdown_amp_adj = (rampdown * color_amplitude) / (256 / 4);
-
-    // add brightness_floor offset to everything
-    uint8_t rampup_adj_with_floor   = rampup_amp_adj   + brightness_floor;
-    uint8_t rampdown_adj_with_floor = rampdown_amp_adj + brightness_floor;
-
-
-    if( section ) {
-        if( section == 1) {
-            // section 1: 0x40..0x7F
-            rgb.r = brightness_floor;
-            rgb.g = rampdown_adj_with_floor;
-            rgb.b = rampup_adj_with_floor;
-        } else {
-            // section 2; 0x80..0xBF
-            rgb.r = rampup_adj_with_floor;
-            rgb.g = brightness_floor;
-            rgb.b = rampdown_adj_with_floor;
-        }
-    } else {
-        // section 0: 0x00..0x3F
-        rgb.r = rampdown_adj_with_floor;
-        rgb.g = rampup_adj_with_floor;
-        rgb.b = brightness_floor;
-    }
-}
-
-// fill_rainbow() from fastled's colorutils, but meant to work with 4bpp arrays
-void fill_rainbow_smolboi( uint16_t * targetArray, int numToFill,
-                  uint8_t initialhue,
-                  uint8_t deltahue )
-{
-    CHSV hsv;
-    hsv.hue = initialhue;
-    hsv.val = 255;
-    hsv.sat = 240;
-
-    for( int i = 0; i < numToFill; ++i) {
-        CRGB rgb;
-        hsv2rgb_raw_C(hsv,rgb);
-        leds[i] = M_Pack_4bpp(rgb.r >> 4, rgb.g >> 4, rgb.b >> 4);
-        hsv.hue += deltahue;
-    }
+uint16_t calcRainbow(uint8_t step) {
+  step &= 0x2F;
+  if (0x20 <= step && step <= 0x2F) {
+    step &= 0xF;
+    return M_Pack_4bpp(step, 0, 0x0F-step);   
+  } else if (0x10 <= step && step <= 0x1F) {
+    step &= 0xF;
+    return M_Pack_4bpp(0, 0x0F-step, step);
+  } else {
+    return M_Pack_4bpp(0x0F-step, step, 0);
+  }
 }
 
 uint16_t rainbowTick() {
-  uint8_t deltaHue = 10;
-  uint8_t thisHue  = localStateVars[0]+=3;
-  fill_rainbow_smolboi(leds, NUM_LEDS, thisHue, deltaHue);
-  return 0;
+  uint8_t thisHue  = localStateVars[0]++;
+  for(int i = 0; i < NUM_LEDS; i++) {
+    leds[i] = calcRainbow( ((int)(i + thisHue)) );
+  }
+  return M_MsToTick(10);
 }
 
 #endif
@@ -433,33 +327,35 @@ int findDotInLeds(uint16_t value) {
 }
 
 
-void pacmanDrawEntity(uint16_t color, int default_pos) {
+int pacmanDrawEntity(uint16_t color, int default_pos) {
   int pos = findDotInLeds(color);
   if (pos < 0) pos = default_pos;
+  int newpos = (pos + 1) >= NUM_LEDS ? 0 : pos + 1;
   leds[pos] = 0;
-  leds[(pos + 1) >= NUM_LEDS ? 0 : pos + 1] = color;
+  leds[newpos] = color;
+  return newpos;
 }
 
 PROGMEM const uint16_t pacman_ghosts_table[] = {
   M_Pack_4bpp(0xF,0x6,0x0), // clyde
   M_Pack_4bpp(0,0xF,0xF), // inky
   M_Pack_4bpp(0xF,1,0xC), // pinky
-  M_Pack_4bpp(0xF,0,0) // blinky
+  M_Pack_4bpp(0xF,0,0), // blinky
+  M_Pack_4bpp(0xF,0xF,0), // pacman
 };
 
 uint16_t pacmanTick() {
-  const uint16_t pacman = M_Pack_4bpp(0xF,0xF,0);
   const uint16_t dot = M_Pack_4bpp(0x1,0x1,0x1);
-
-  pacmanDrawEntity(pacman, 4*PACMAN_SPACING);
-  for (int8_t i = 3; i >= 0; i--) {
-    pacmanDrawEntity(pgm_read_word_near(&pacman_ghosts_table[i]), i*PACMAN_SPACING);
+  
+  // last entity to be drawn is assumed to be pacman
+  int lastent_pos = -1;
+  for (int8_t i = 0; i < 5; i++) {
+    lastent_pos = pacmanDrawEntity(pgm_read_word_near(&pacman_ghosts_table[i]), i*PACMAN_SPACING);
   }
 
   // draw dots ahead of pacman, making sure not to clobber the ghosts.
-  int pacman_pos = findDotInLeds(pacman);
   for (int i = 0; i < NUM_LEDS; i+= 2) {
-    if (i > pacman_pos && leds[i] == 0) leds[i] = dot;
+    if (i > lastent_pos && leds[i] == 0) leds[i] = dot;
   }
 
   return M_MsToTick(80);
@@ -483,9 +379,6 @@ PROGMEM const uint16_t robotron_color_table[] = {
   M_Pack_4bpp(255>>5,0,0),          // red
 };
 
-uint16_t tinyModulo(uint16_t a, uint16_t b) {
-  return a - b * (a/b);
-}
 
 uint16_t robotronTick() {
   if (localStateVars[0] < NUM_LEDS) {
