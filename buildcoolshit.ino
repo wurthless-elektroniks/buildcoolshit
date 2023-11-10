@@ -141,9 +141,12 @@ void blankAllLeds() {
   }
 }
 
-uint16_t tinyModulo(uint16_t a, uint16_t b) {
-  return a - b * (a/b);
+uint16_t prng;
+uint16_t rngAdvance() {
+  return ( prng = ((prng << 1) | ( prng & 0x8000 ? 1 : 0)) ^ ((analogRead(3) > analogRead(2) ? 0 : 1) ));
 }
+#define rand() rngAdvance()
+#define srand(x) prng = x;
 
 ////////////////////////////////////////////////////////////////////////
 // chaser effect
@@ -294,7 +297,12 @@ uint16_t randomFill( uint16_t(*f)() ) {
 
 #ifdef INCLUDE_CHAOS
 uint16_t chaosFill() {
-    uint8_t picked_number = random() & 7;
+    uint8_t picked_number;
+    for (int tries = 0; tries < 4; tries++) {
+      picked_number = rand() & 7;
+      if (localStateVars[0] == picked_number) continue;
+    }
+    localStateVars[0] = picked_number;
     return M_Get_Floodtable_Color(picked_number);
 }
 
@@ -305,7 +313,7 @@ uint16_t chaosTick() {
 
 #ifdef INCLUDE_SUPERCOMPUTER
 uint16_t supercomputerFill() {
-  return random() & 0xFF > 30 ? 0x000F : 0;
+  return rand() & 0xFF > 30 ? 0x000F : 0;
 }
 
 uint16_t supercomputerTick() {
@@ -385,26 +393,45 @@ PROGMEM const uint16_t robotron_color_table[] = {
   M_Pack_4bpp(255>>5,0,0),          // red
 };
 
-
+// this method glitches out after so-and-so iterations.
+// we do our best to hide it. the alternative is to use modulo,
+// which works perfect, but takes more codespace
 uint16_t robotronTick() {
   if (localStateVars[0] < NUM_LEDS) {
-    leds[localStateVars[0]++] = pgm_read_word_near(&robotron_color_table[tinyModulo(localStateVars[0],7)]);
+    leds[localStateVars[0]++] = pgm_read_word_near(&robotron_color_table[localStateVars[2]]);
+    localStateVars[2]++;
+    if (localStateVars[2] >= 7) {
+      localStateVars[2] = 0;
+    }
     return M_MsToTick(80);
   }
 
   // on even frames, blink every 7th chaser counterclockwise
   int8_t dot = -1;
-  if ((localStateTick & 1) != 0) {
-    dot = 6 - tinyModulo((localStateTick >> 1), 7);
+  if (localStateVars[1]) {
+    dot = 6 - localStateVars[2];
+    localStateVars[2] ++;
+    if (localStateVars[2] >= 7) localStateVars[2] = 0;
   }
+  localStateVars[1] = localStateVars[1] ? 0 : 1;
 
   // advance the normal color chasers clockwise
+  uint8_t step = 0;
   for (int i = 0; i < NUM_LEDS; i++) {
-    if (dot != -1 && tinyModulo(i,7)==dot) leds[i] = 0x0FFF;
-    else leds[i] = pgm_read_word_near(&robotron_color_table[ tinyModulo( abs(i - localStateTick), 7) ]);
+    if (step == dot) {
+      leds[i] = 0x0FFF;
+    } else {
+      int8_t offs = abs(step-localStateVars[3]);
+      while (offs >= 7) offs -= 7;
+      leds[i] = pgm_read_word_near(&robotron_color_table[offs]);
+    }
+    step ++;
+    if (step >= 7) step = 0;
   }
 
-  localStateTick ++;
+  localStateVars[3]++;
+  if (localStateVars[3] >= 16*7) localStateVars[3] = 0;
+  
   return M_MsToTick(80);
 }
 
@@ -458,7 +485,7 @@ void reset() {
 }
 
 void setup() {
-  randomSeed(analogRead(3));
+  srand(analogRead(3));
   reset();
 }
 
@@ -468,7 +495,7 @@ void loop() {
   if ( millis() < loopTickNextOut) return;
 
   // advance RNG every tick
-  random();
+  rand();
 
   unsigned long before = millis();
 
